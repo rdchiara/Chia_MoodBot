@@ -1,0 +1,4 @@
+config.py
+credenciais.json
+*.log
+__pycache__/
