@@ -6,8 +6,21 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.apihelper import ApiTelegramException
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 import config
+import os
+import logging
+
+# Cria a pasta de logs automaticamente
+os.makedirs("logs", exist_ok=True)
+
+# Configura o ficheiro onde os erros serão guardados
+logging.basicConfig(
+    filename='logs/erros.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # ================= CONFIGURAÇÕES =================
 TOKEN = config.TELEGRAM_TOKEN
@@ -92,6 +105,103 @@ def rodar_agendador():
 
 # Inicia a thread dos lembretes em segundo plano
 threading.Thread(target=rodar_agendador, daemon=True).start()
+
+
+# ================= COMANDOS DE AJUDA E MÉTRICAS =================
+@bot.message_handler(commands=['help'])
+def comando_help(message):
+    texto = (
+        "🧠 **Guia de Utilização - Chia MoodBot**\n\n"
+        "Este assistente monitoriza a sua saúde mental diariamente e guarda os registos numa folha de cálculo do Google Sheets.\n\n"
+        "**Como Avaliar (Escala de 0 a 5):**\n"
+        "• 0 = Ausência total do sintoma (Nulo).\n"
+        "• 5 = Intensidade máxima ou insuportável.\n\n"
+        "**O que está a ser monitorizado:**\n"
+        "• Depressão: Angústia, Irritação, Aperto no peito, Nó na garganta.\n"
+        "• Ansiedade: Inquietação, Agitação, Impulsividade.\n"
+        "• TDAH: Desatenção, Produtividade.\n"
+        "• Humor: Felicidade, Tristeza, Ânimo.\n"
+        "• Medicação: Ritalina, Vurtuoso, Revoc e extras.\n\n"
+        "**Comandos Disponíveis:**\n"
+        "/start ou /avaliar - Inicia o check-in manual.\n"
+        "/metrica - Calcula a média dos sintomas nos últimos 7 dias.\n"
+        "/log - Envia o ficheiro de erros do sistema.\n"
+        "/help - Mostra este guia de funcionamento.\n\n"
+        "⏰ **Lembretes Automáticos:**\n"
+        "Receberá notificações proativas todos os dias às 08:00 e às 21:00 com um atalho para registar o seu estado."
+    )
+    bot.send_message(message.chat.id, texto, parse_mode="Markdown")
+
+@bot.message_handler(commands=['metrica'])
+def comando_metrica(message):
+    chat_id = message.chat.id
+    bot.send_message(chat_id, "⏳ Analisando os últimos 7 dias na planilha...")
+    
+    try:
+        # Puxa todos os dados e ignora o cabeçalho
+        linhas = sheet.get_all_values()[1:] 
+        hoje = datetime.now().date()
+        limite = hoje - timedelta(days=7)
+        
+        # Estrutura: { "Data": { "Nome da Métrica": [notas] } }
+        notas_diarias = defaultdict(lambda: defaultdict(list))
+        nomes_metricas = [m[0] for m in METRICAS]
+        
+        for linha in linhas:
+            if not linha or not linha[0]:
+                continue
+            try:
+                # Verifica se a linha está dentro dos últimos 7 dias
+                data_linha = datetime.strptime(linha[0], "%d/%m/%Y").date()
+                if limite < data_linha <= hoje:
+                    data_str = linha[0]
+                    # Varre as 12 colunas de métricas (começam no índice 2)
+                    for idx, nome in enumerate(nomes_metricas):
+                        col_idx = idx + 2
+                        if col_idx < len(linha) and linha[col_idx].strip() != "":
+                            notas_diarias[data_str][nome].append(int(linha[col_idx]))
+            except ValueError:
+                continue # Ignora linhas com formatação de data inválida
+        
+        dias_avaliados = len(notas_diarias)
+        if dias_avaliados == 0:
+            bot.send_message(chat_id, "📉 Nenhum registo encontrado nos últimos 7 dias.")
+            return
+        
+        resposta = f"📊 **Médias dos últimos 7 dias**\n*(Baseado em {dias_avaliados} dia(s) avaliado(s))*\n\n"
+        
+        # Calcula a média isolada de cada dia, e depois a média geral da semana
+        for nome, emoji in METRICAS:
+            soma_das_medias_diarias = 0
+            for data, metricas_dict in notas_diarias.items():
+                notas = metricas_dict.get(nome, [])
+                if notas:
+                    soma_das_medias_diarias += sum(notas) / len(notas)
+            
+            media_final = soma_das_medias_diarias / dias_avaliados
+            resposta += f"{emoji} {nome}: {media_final:.1f}\n"
+            
+        bot.send_message(chat_id, resposta, parse_mode="Markdown")
+        
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Erro ao calcular métricas: {e}")
+
+@bot.message_handler(commands=['log'])
+def enviar_arquivo_log(message):
+    chat_id = message.chat.id
+    if chat_id != MEU_CHAT_ID:
+        bot.send_message(chat_id, "🚫 Acesso negado.")
+        return
+        
+    try:
+        with open('logs/erros.log', 'rb') as arquivo_log:
+            bot.send_document(chat_id, arquivo_log, caption="⚙️ Aqui está o ficheiro de erros do sistema.")
+    except FileNotFoundError:
+        bot.send_message(chat_id, "✨ O ficheiro de logs ainda não foi criado. O bot está a correr sem erros críticos!")
+
+
+
+
 
 # ================= CALLBACKS =================
 @bot.callback_query_handler(func=lambda call: True)
@@ -210,5 +320,5 @@ while True:
     try:
         bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
     except Exception as e:
-        print(f"Erro de conexão. Reconectando em 5 segundos... Erro: {e}")
+        logging.error(f"Falha de conexão: {e}")
         time.sleep(5)
