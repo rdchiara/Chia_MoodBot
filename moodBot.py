@@ -194,11 +194,16 @@ def enviar_arquivo_log(message):
         bot.send_message(chat_id, "🚫 Acesso negado.")
         return
         
+    caminho_log = 'logs/erros.log'
     try:
-        with open('logs/erros.log', 'rb') as arquivo_log:
-            bot.send_document(chat_id, arquivo_log, caption="⚙️ Aqui está o ficheiro de erros do sistema.")
-    except FileNotFoundError:
-        bot.send_message(chat_id, "✨ O ficheiro de logs ainda não foi criado. O bot está a correr sem erros críticos!")
+        # Verifica se o arquivo existe e possui algum conteúdo (tamanho > 0 bytes)
+        if os.path.exists(caminho_log) and os.path.getsize(caminho_log) > 0:
+            with open(caminho_log, 'rb') as arquivo_log:
+                bot.send_document(chat_id, arquivo_log, caption="⚙️ Aqui está o arquivo de erros do sistema.")
+        else:
+            bot.send_message(chat_id, "✨ O arquivo de logs está limpo e vazio. O bot está rodando perfeitamente!")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Erro ao acessar logs: {e}")
 
 @bot.message_handler(commands=['desfazer'])
 def comando_desfazer(message):
