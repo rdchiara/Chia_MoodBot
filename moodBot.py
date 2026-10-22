@@ -126,6 +126,7 @@ def comando_help(message):
         "/start ou /avaliar - Inicia o check-in manual.\n"
         "/metrica - Calcula a média dos sintomas nos últimos 7 dias.\n"
         "/log - Envia o ficheiro de erros do sistema.\n"
+        "/desfazer - Apaga o último registro salvo (caso tenha preenchido errado).\n"
         "/help - Mostra este guia de funcionamento.\n\n"
         "⏰ **Lembretes Automáticos:**\n"
         "Receberá notificações proativas todos os dias às 08:00 e às 21:00 com um atalho para registar o seu estado."
@@ -199,7 +200,34 @@ def enviar_arquivo_log(message):
     except FileNotFoundError:
         bot.send_message(chat_id, "✨ O ficheiro de logs ainda não foi criado. O bot está a correr sem erros críticos!")
 
-
+@bot.message_handler(commands=['desfazer'])
+def comando_desfazer(message):
+    chat_id = message.chat.id
+    if chat_id != MEU_CHAT_ID:
+        bot.send_message(chat_id, "🚫 Acesso negado.")
+        return
+    
+    try:
+        bot.send_message(chat_id, "⏳ Acessando a planilha...")
+        linhas = sheet.get_all_values()
+        total_linhas = len(linhas)
+        
+        if total_linhas <= 1:
+            bot.send_message(chat_id, "⚠️ A planilha está vazia (apenas cabeçalho). Não há o que desfazer.")
+            return
+        
+        # Pega as informações da última linha para confirmar ao usuário
+        ultima_linha = linhas[-1]
+        data_registro = ultima_linha[0]
+        hora_registro = ultima_linha[1]
+        
+        # Apaga a última linha (no gspread, o índice 1 é a primeira linha)
+        sheet.delete_rows(total_linhas)
+        
+        bot.send_message(chat_id, f"🗑️ **Registro Apagado!**\nA avaliação do dia {data_registro} às {hora_registro} foi removida da planilha com sucesso.", parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Erro ao tentar desfazer: {e}")
+        logging.error(f"Erro no /desfazer: {e}")
 
 
 
@@ -310,9 +338,39 @@ def finalizar_avaliacao(message):
     try:
         bot.send_message(chat_id, "⏳ Salvando no banco de dados...")
         sheet.append_row(linha)
+        
+        # Monta o resumo formatado
+        resumo = "📋 **Resumo do Registro**\n\n🧠 *Métricas (Apenas > 0):*\n"
+        tem_metrica = False
+        for nome, emoji in METRICAS:
+            nota = estado['respostas'].get(nome, 0)
+            if nota > 0:
+                resumo += f"{emoji} {nome}: {nota}\n"
+                tem_metrica = True
+        if not tem_metrica:
+            resumo += "Nenhuma métrica registrada.\n"
+            
+        resumo += "\n💊 *Medicamentos:*\n"
+        tem_med = False
+        for med in REMEDIOS_PADRAO:
+            qtd = estado['meds'].get(med, 0)
+            if qtd > 0:
+                resumo += f"• {med}: {qtd}\n"
+                tem_med = True
+        if estado['outros_meds']:
+            resumo += f"• Outros: {outros_meds_str}\n"
+            tem_med = True
+        if not tem_med:
+            resumo += "Nenhum medicamento.\n"
+            
+        resumo += f"\n📝 *Obs:* {obs}"
+        
+        # Envia o resumo e finaliza
+        bot.send_message(chat_id, resumo, parse_mode="Markdown")
         bot.send_message(chat_id, "🎉 **Avaliação salva com sucesso!**", parse_mode="Markdown")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Erro ao salvar: {e}")
+        logging.error(f"Erro ao salvar: {e}")
 
 # ================= EXECUÇÃO =================
 print("Bot rodando com agendador de lembretes ativo...")
