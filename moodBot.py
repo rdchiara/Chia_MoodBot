@@ -126,7 +126,8 @@ def comando_help(message):
         "/start ou /avaliar - Inicia o check-in manual.\n"
         "/metrica - Calcula a média dos sintomas nos últimos 7 dias.\n"
         "/log - Envia o ficheiro de erros do sistema.\n"
-        "/desfazer - Apaga o último registro salvo (caso tenha preenchido errado).\n"
+        "/desfazer - Apaga o último registo salvo (caso tenha preenchido errado).\n"
+        "/ping - Verifica se o bot está ativo e a responder.\n"
         "/help - Mostra este guia de funcionamento.\n\n"
         "⏰ **Lembretes Automáticos:**\n"
         "Receberá notificações proativas todos os dias às 08:00 e às 21:00 com um atalho para registar o seu estado."
@@ -234,6 +235,17 @@ def comando_desfazer(message):
         bot.send_message(chat_id, f"❌ Erro ao tentar desfazer: {e}")
         logging.error(f"Erro no /desfazer: {e}")
 
+
+
+
+@bot.message_handler(commands=['ping'])
+def comando_ping(message):
+    chat_id = message.chat.id
+    if chat_id != MEU_CHAT_ID:
+        bot.send_message(chat_id, "🚫 Acesso negado.")
+        return
+    
+    bot.send_message(chat_id, "🏓 *Pong!* O sistema está online e a monitorizar a sua rotina.", parse_mode="Markdown")
 
 
 # ================= CALLBACKS =================
