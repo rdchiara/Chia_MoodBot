@@ -365,6 +365,30 @@ def retomar_med(message):
         bot.send_message(message.chat.id, "Esse remédio já está ativo.")
     else:
         bot.send_message(message.chat.id, "Remédio não encontrado. Veja em /meds.")
+        
+        
+@bot.message_handler(func=lambda message: message.text and message.text.startswith('/'))
+def comando_desconhecido(message):
+    if message.chat.id != MEU_CHAT_ID: return
+    
+    texto = (
+        "❓ **Comando não reconhecido.**\n\n"
+        "Aqui está a lista de comandos que eu entendo:\n\n"
+        "📊 *Avaliação*\n"
+        "`/avaliar` - Inicia o check-in manual.\n"
+        "`/metrica` - Médias dos últimos 7 dias.\n"
+        "`/desfazer` - Apaga o último registo.\n\n"
+        "💊 *Medicamentos*\n"
+        "`/meds` - Status atual dos remédios.\n"
+        "`/addmed` - Adiciona novo remédio contínuo.\n"
+        "`/pausar` - Oculta um remédio do check-in.\n"
+        "`/retomar` - Volta a exibir o remédio.\n\n"
+        "⚙️ *Sistema*\n"
+        "`/help` - Guia de funcionamento detalhado.\n"
+        "`/ping` - Verifica se o bot está online.\n"
+        "`/log` - Ficheiro de erros."
+    )
+    bot.send_message(message.chat.id, texto, parse_mode="Markdown")
 
 # ================= CALLBACKS =================
 @bot.callback_query_handler(func=lambda call: True)
