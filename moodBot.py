@@ -9,6 +9,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from collections import defaultdict
 import config
+import json
 import os
 import logging
 
@@ -22,6 +23,34 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# ================= ARQUIVOS JSON DINÂMICOS =================
+ARQUIVO_PADRAO = 'logs/remedios_padrao.json'
+ARQUIVO_MEDS = 'logs/meds_ativos.json'
+
+def obter_remedios_padrao():
+    if os.path.exists(ARQUIVO_PADRAO):
+        with open(ARQUIVO_PADRAO, 'r') as f:
+            return json.load(f)
+    # Se não existir, cria a lista inicial
+    padrao = ["Ritalina", "Vurtuoso", "Revoc"]
+    with open(ARQUIVO_PADRAO, 'w') as f:
+        json.dump(padrao, f)
+    return padrao
+
+def salvar_remedios_padrao(lista):
+    with open(ARQUIVO_PADRAO, 'w') as f:
+        json.dump(lista, f)
+
+def obter_meds_ativos():
+    if os.path.exists(ARQUIVO_MEDS):
+        with open(ARQUIVO_MEDS, 'r') as f:
+            return json.load(f)
+    return obter_remedios_padrao()
+
+def salvar_meds_ativos(lista):
+    with open(ARQUIVO_MEDS, 'w') as f:
+        json.dump(lista, f)
+
 # ================= CONFIGURAÇÕES =================
 TOKEN = config.TELEGRAM_TOKEN
 MEU_CHAT_ID = config.CHAT_ID
@@ -31,7 +60,10 @@ bot = telebot.TeleBot(TOKEN)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
 client = gspread.authorize(creds)
-sheet = client.open('MoodBot').sheet1
+
+planilha = client.open('MoodBot')
+sheet_humor = planilha.worksheet('Humor')
+sheet_meds = planilha.worksheet('Medicamentos')
 
 # ================= ESTRUTURA DE DADOS =================
 METRICAS = [
@@ -40,7 +72,6 @@ METRICAS = [
     ("Impulsividade", "⚡"), ("Desatenção", "🫠"), ("Produtividade", "📈"),
     ("Felicidade", "😊"), ("Tristeza", "😢"), ("Ânimo", "🔋")
 ]
-REMEDIOS_PADRAO = ["Ritalina", "Vurtuoso", "Revoc"]
 user_state = {}
 
 # ================= TECLADOS =================
@@ -68,7 +99,7 @@ def gerar_teclado_remedios(chat_id):
         btn_mais = InlineKeyboardButton("+", callback_data=f"med_add_{med}")
         markup.row(btn_menos, btn_nome, btn_mais)
     
-    markup.add(InlineKeyboardButton("➕ Adicionar Novo Remédio", callback_data="med_novo"))
+    markup.add(InlineKeyboardButton("➕ Adicionar Novo Remédio (Apenas hoje)", callback_data="med_novo"))
     markup.add(InlineKeyboardButton("✅ Salvar Remédios e Finalizar", callback_data="med_avancar"))
     return markup
 
@@ -77,7 +108,7 @@ def iniciar_fluxo_avaliacao(chat_id):
     user_state[chat_id] = {
         'step': 0,
         'respostas': {nome: 0 for nome, emoji in METRICAS},
-        'meds': {med: 0 for med in REMEDIOS_PADRAO},
+        'meds': {med: 0 for med in obter_meds_ativos()},
         'outros_meds': []
     }
     texto = "📊 **Avaliação Diária**\n\nSelecione as notas de 0 a 5 para hoje:\n*(0 = Nulo / 5 = Máximo)*"
@@ -107,45 +138,41 @@ def rodar_agendador():
 threading.Thread(target=rodar_agendador, daemon=True).start()
 
 
-# ================= COMANDOS DE AJUDA E MÉTRICAS =================
+# ================= COMANDOS DE AJUDA, MÉTRICAS E GESTÃO =================
 @bot.message_handler(commands=['help'])
 def comando_help(message):
     texto = (
         "🧠 **Guia de Utilização - Chia MoodBot**\n\n"
-        "Este assistente monitoriza a sua saúde mental diariamente e guarda os registos numa folha de cálculo do Google Sheets.\n\n"
+        "Este assistente monitoriza a sua saúde mental diariamente e guarda os registos no Google Sheets (Abas 'Humor' e 'Medicamentos').\n\n"
         "**Como Avaliar (Escala de 0 a 5):**\n"
         "• 0 = Ausência total do sintoma (Nulo).\n"
         "• 5 = Intensidade máxima ou insuportável.\n\n"
-        "**O que está a ser monitorizado:**\n"
-        "• Depressão: Angústia, Irritação, Aperto no peito, Nó na garganta.\n"
-        "• Ansiedade: Inquietação, Agitação, Impulsividade.\n"
-        "• TDAH: Desatenção, Produtividade.\n"
-        "• Humor: Felicidade, Tristeza, Ânimo.\n"
-        "• Medicação: Ritalina, Vurtuoso, Revoc e extras.\n\n"
         "**Comandos Disponíveis:**\n"
         "/start ou /avaliar - Inicia o check-in manual.\n"
         "/metrica - Calcula a média dos sintomas nos últimos 7 dias.\n"
         "/log - Envia o ficheiro de erros do sistema.\n"
-        "/desfazer - Apaga o último registo salvo (caso tenha preenchido errado).\n"
-        "/ping - Verifica se o bot está ativo e a responder.\n"
-        "/help - Mostra este guia de funcionamento.\n\n"
-        "⏰ **Lembretes Automáticos:**\n"
-        "Receberá notificações proativas todos os dias às 08:00 e às 21:00 com um atalho para registar o seu estado."
+        "/desfazer - Apaga o último registo salvo das planilhas.\n"
+        "/ping - Verifica se o bot está ativo e a responder.\n\n"
+        "💊 **Gestão de Remédios:**\n"
+        "/meds - Mostra o status atual dos seus remédios.\n"
+        "/addmed [Nome] - Adiciona um novo remédio contínuo à sua rotina.\n"
+        "/pausar [Nome] - Pausa as perguntas diárias sobre um remédio.\n"
+        "/retomar [Nome] - Volta a exibir o remédio pausado.\n\n"
+        "⏰ **Lembretes Automáticos:** 08:00 e 21:00."
     )
     bot.send_message(message.chat.id, texto, parse_mode="Markdown")
 
 @bot.message_handler(commands=['metrica'])
 def comando_metrica(message):
     chat_id = message.chat.id
-    bot.send_message(chat_id, "⏳ Analisando os últimos 7 dias na planilha...")
+    bot.send_message(chat_id, "⏳ Analisando os últimos 7 dias na planilha de Humor...")
     
     try:
-        # Puxa todos os dados e ignora o cabeçalho
-        linhas = sheet.get_all_values()[1:] 
+        # Puxa os dados da aba de Humor
+        linhas = sheet_humor.get_all_values()[1:] 
         hoje = datetime.now().date()
         limite = hoje - timedelta(days=7)
         
-        # Estrutura: { "Data": { "Nome da Métrica": [notas] } }
         notas_diarias = defaultdict(lambda: defaultdict(list))
         nomes_metricas = [m[0] for m in METRICAS]
         
@@ -153,17 +180,16 @@ def comando_metrica(message):
             if not linha or not linha[0]:
                 continue
             try:
-                # Verifica se a linha está dentro dos últimos 7 dias
                 data_linha = datetime.strptime(linha[0], "%d/%m/%Y").date()
                 if limite < data_linha <= hoje:
                     data_str = linha[0]
-                    # Varre as 12 colunas de métricas (começam no índice 2)
+                    # As 12 colunas de métricas começam no índice 2
                     for idx, nome in enumerate(nomes_metricas):
                         col_idx = idx + 2
                         if col_idx < len(linha) and linha[col_idx].strip() != "":
                             notas_diarias[data_str][nome].append(int(linha[col_idx]))
             except ValueError:
-                continue # Ignora linhas com formatação de data inválida
+                continue 
         
         dias_avaliados = len(notas_diarias)
         if dias_avaliados == 0:
@@ -172,7 +198,6 @@ def comando_metrica(message):
         
         resposta = f"📊 **Médias dos últimos 7 dias**\n*(Baseado em {dias_avaliados} dia(s) avaliado(s))*\n\n"
         
-        # Calcula a média isolada de cada dia, e depois a média geral da semana
         for nome, emoji in METRICAS:
             soma_das_medias_diarias = 0
             for data, metricas_dict in notas_diarias.items():
@@ -191,13 +216,10 @@ def comando_metrica(message):
 @bot.message_handler(commands=['log'])
 def enviar_arquivo_log(message):
     chat_id = message.chat.id
-    if chat_id != MEU_CHAT_ID:
-        bot.send_message(chat_id, "🚫 Acesso negado.")
-        return
+    if chat_id != MEU_CHAT_ID: return
         
     caminho_log = 'logs/erros.log'
     try:
-        # Verifica se o arquivo existe e possui algum conteúdo (tamanho > 0 bytes)
         if os.path.exists(caminho_log) and os.path.getsize(caminho_log) > 0:
             with open(caminho_log, 'rb') as arquivo_log:
                 bot.send_document(chat_id, arquivo_log, caption="⚙️ Aqui está o arquivo de erros do sistema.")
@@ -209,44 +231,103 @@ def enviar_arquivo_log(message):
 @bot.message_handler(commands=['desfazer'])
 def comando_desfazer(message):
     chat_id = message.chat.id
-    if chat_id != MEU_CHAT_ID:
-        bot.send_message(chat_id, "🚫 Acesso negado.")
-        return
+    if chat_id != MEU_CHAT_ID: return
     
     try:
-        bot.send_message(chat_id, "⏳ Acessando a planilha...")
-        linhas = sheet.get_all_values()
-        total_linhas = len(linhas)
+        bot.send_message(chat_id, "⏳ Acessando as planilhas...")
+        linhas_humor = sheet_humor.get_all_values()
+        total_linhas = len(linhas_humor)
         
         if total_linhas <= 1:
-            bot.send_message(chat_id, "⚠️ A planilha está vazia (apenas cabeçalho). Não há o que desfazer.")
+            bot.send_message(chat_id, "⚠️ As planilhas estão vazias. Não há o que desfazer.")
             return
         
-        # Pega as informações da última linha para confirmar ao usuário
-        ultima_linha = linhas[-1]
+        ultima_linha = linhas_humor[-1]
         data_registro = ultima_linha[0]
         hora_registro = ultima_linha[1]
         
-        # Apaga a última linha (no gspread, o índice 1 é a primeira linha)
-        sheet.delete_rows(total_linhas)
+        # Apaga de ambas as abas
+        sheet_humor.delete_rows(total_linhas)
+        sheet_meds.delete_rows(total_linhas)
         
-        bot.send_message(chat_id, f"🗑️ **Registro Apagado!**\nA avaliação do dia {data_registro} às {hora_registro} foi removida da planilha com sucesso.", parse_mode="Markdown")
+        bot.send_message(chat_id, f"🗑️ **Registro Apagado!**\nA avaliação de {data_registro} às {hora_registro} foi removida das abas Humor e Medicamentos.", parse_mode="Markdown")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Erro ao tentar desfazer: {e}")
         logging.error(f"Erro no /desfazer: {e}")
 
-
-
-
 @bot.message_handler(commands=['ping'])
 def comando_ping(message):
-    chat_id = message.chat.id
-    if chat_id != MEU_CHAT_ID:
-        bot.send_message(chat_id, "🚫 Acesso negado.")
-        return
-    
-    bot.send_message(chat_id, "🏓 *Pong!* O sistema está online e a monitorizar a sua rotina.", parse_mode="Markdown")
+    if message.chat.id != MEU_CHAT_ID: return
+    bot.send_message(message.chat.id, "🏓 *Pong!* O sistema está online e a monitorizar a sua rotina.", parse_mode="Markdown")
 
+@bot.message_handler(commands=['meds'])
+def gerenciar_meds(message):
+    if message.chat.id != MEU_CHAT_ID: return
+    padrao = obter_remedios_padrao()
+    ativos = obter_meds_ativos()
+    
+    texto = "💊 *Status dos Remédios Contínuos:*\n\n"
+    for med in padrao:
+        status = "✅ Ativo" if med in ativos else "⏸️ Pausado"
+        texto += f"• {med}: {status}\n"
+    
+    texto += "\nComandos úteis:\n`/addmed Nome`\n`/pausar Nome`\n`/retomar Nome`"
+    bot.send_message(message.chat.id, texto, parse_mode="Markdown")
+
+@bot.message_handler(commands=['addmed'])
+def comando_addmed(message):
+    if message.chat.id != MEU_CHAT_ID: return
+    
+    novo_med = message.text.replace("/addmed", "").strip()
+    if not novo_med:
+        bot.send_message(message.chat.id, "⚠️ Use o formato: `/addmed NomeDoRemedio`", parse_mode="Markdown")
+        return
+        
+    padrao = obter_remedios_padrao()
+    ativos = obter_meds_ativos()
+    
+    if novo_med not in padrao:
+        padrao.append(novo_med)
+        ativos.append(novo_med)
+        salvar_remedios_padrao(padrao)
+        salvar_meds_ativos(ativos)
+        
+        alerta = (
+            f"✅ **{novo_med}** adicionado ao tratamento!\n\n"
+            f"⚠️ **MUITO IMPORTANTE:** Vá ao Google Sheets na aba *Medicamentos* e adicione uma nova coluna ao final para este remédio (logo antes de 'Outros Remédios')!"
+        )
+        bot.send_message(message.chat.id, alerta, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "Esse medicamento já está cadastrado.")
+
+@bot.message_handler(commands=['pausar'])
+def pausar_med(message):
+    if message.chat.id != MEU_CHAT_ID: return
+    nome = message.text.replace("/pausar", "").strip()
+    ativos = obter_meds_ativos()
+    
+    if nome in ativos:
+        ativos.remove(nome)
+        salvar_meds_ativos(ativos)
+        bot.send_message(message.chat.id, f"⏸️ O bot não perguntará mais sobre *{nome}*.", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "Nome não encontrado ou já pausado. Veja em /meds.")
+
+@bot.message_handler(commands=['retomar'])
+def retomar_med(message):
+    if message.chat.id != MEU_CHAT_ID: return
+    nome = message.text.replace("/retomar", "").strip()
+    padrao = obter_remedios_padrao()
+    ativos = obter_meds_ativos()
+    
+    if nome in padrao and nome not in ativos:
+        ativos.append(nome)
+        salvar_meds_ativos(ativos)
+        bot.send_message(message.chat.id, f"▶️ *{nome}* voltou para a rotina de perguntas!", parse_mode="Markdown")
+    elif nome in ativos:
+        bot.send_message(message.chat.id, "Esse remédio já está ativo.")
+    else:
+        bot.send_message(message.chat.id, "Remédio não encontrado. Veja em /meds.")
 
 # ================= CALLBACKS =================
 @bot.callback_query_handler(func=lambda call: True)
@@ -254,7 +335,6 @@ def callback_handler(call):
     chat_id = call.message.chat.id
     data = call.data
 
-    # Handler especial para o botão do lembrete
     if data == "iniciar_lembrete":
         bot.answer_callback_query(call.id)
         iniciar_fluxo_avaliacao(chat_id)
@@ -307,7 +387,7 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
         
     elif data == "med_novo":
-        msg = bot.send_message(chat_id, "Digite o nome e a quantidade do novo remédio (ex: Dipirona - 1):")
+        msg = bot.send_message(chat_id, "Digite o nome e a quantidade do novo remédio esporádico (ex: Dipirona - 1):")
         bot.register_next_step_handler(msg, adicionar_novo_remedio, call.message.message_id)
         bot.answer_callback_query(call.id)
 
@@ -326,7 +406,7 @@ def callback_handler(call):
 def adicionar_novo_remedio(message, painel_msg_id):
     chat_id = message.chat.id
     user_state[chat_id]['outros_meds'].append(message.text)
-    bot.send_message(chat_id, "✅ Adicionado!")
+    bot.send_message(chat_id, "✅ Adicionado aos remédios extra de hoje!")
     bot.send_message(chat_id, "💊 **Medicamentos**\nQuantidade de comprimidos tomados hoje:", reply_markup=gerar_teclado_remedios(chat_id), parse_mode="Markdown")
 
 # ================= FINALIZAÇÃO =================
@@ -340,21 +420,24 @@ def finalizar_avaliacao(message):
     hora_str = agora.strftime("%H:%M:%S")
     outros_meds_str = " | ".join(estado['outros_meds']) if estado['outros_meds'] else "Nenhum"
 
-    linha = [
-        data_str, hora_str,
-        estado['respostas'].get("Angústia", 0), estado['respostas'].get("Irritação", 0),
-        estado['respostas'].get("Aperto no peito", 0), estado['respostas'].get("Nó na garganta", 0),
-        estado['respostas'].get("Inquietação", 0), estado['respostas'].get("Agitação", 0),
-        estado['respostas'].get("Impulsividade", 0), estado['respostas'].get("Desatenção", 0),
-        estado['respostas'].get("Produtividade", 0), estado['respostas'].get("Felicidade", 0),
-        estado['respostas'].get("Tristeza", 0), estado['respostas'].get("Ânimo", 0),
-        estado['meds'].get("Ritalina", 0), estado['meds'].get("Vurtuoso", 0),
-        estado['meds'].get("Revoc", 0), outros_meds_str, obs
-    ]
+    # 1. Monta a linha do Humor (Métricas + Obs)
+    linha_humor = [data_str, hora_str]
+    for nome, emoji in METRICAS:
+        linha_humor.append(estado['respostas'].get(nome, 0))
+    linha_humor.append(obs)
+
+    # 2. Monta a linha dos Medicamentos Dinâmicos (Remédios Contínuos + Outros)
+    linha_meds = [data_str, hora_str]
+    for med in obter_remedios_padrao():
+        linha_meds.append(estado['meds'].get(med, 0))
+    linha_meds.append(outros_meds_str)
 
     try:
-        bot.send_message(chat_id, "⏳ Salvando no banco de dados...")
-        sheet.append_row(linha)
+        bot.send_message(chat_id, "⏳ Salvando nas duas planilhas...")
+        
+        # 3. Envia para as abas correspondentes
+        sheet_humor.append_row(linha_humor)
+        sheet_meds.append_row(linha_meds)
         
         # Monta o resumo formatado
         resumo = "📋 **Resumo do Registro**\n\n🧠 *Métricas (Apenas > 0):*\n"
@@ -369,13 +452,13 @@ def finalizar_avaliacao(message):
             
         resumo += "\n💊 *Medicamentos:*\n"
         tem_med = False
-        for med in REMEDIOS_PADRAO:
+        for med in obter_remedios_padrao():
             qtd = estado['meds'].get(med, 0)
             if qtd > 0:
                 resumo += f"• {med}: {qtd}\n"
                 tem_med = True
         if estado['outros_meds']:
-            resumo += f"• Outros: {outros_meds_str}\n"
+            resumo += f"• Extra: {outros_meds_str}\n"
             tem_med = True
         if not tem_med:
             resumo += "Nenhum medicamento.\n"
