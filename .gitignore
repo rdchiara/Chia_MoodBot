@@ -1,4 +1,4 @@
 config.py
-credenciais.json
-*.log
+credentials.json
 __pycache__/
+*.log
