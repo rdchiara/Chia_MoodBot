@@ -287,16 +287,53 @@ def comando_addmed(message):
     ativos = obter_meds_ativos()
     
     if novo_med not in padrao:
-        padrao.append(novo_med)
-        ativos.append(novo_med)
-        salvar_remedios_padrao(padrao)
-        salvar_meds_ativos(ativos)
-        
-        alerta = (
-            f"✅ **{novo_med}** adicionado ao tratamento!\n\n"
-            f"⚠️ **MUITO IMPORTANTE:** Vá ao Google Sheets na aba *Medicamentos* e adicione uma nova coluna ao final para este remédio (logo antes de 'Outros Remédios')!"
-        )
-        bot.send_message(message.chat.id, alerta, parse_mode="Markdown")
+        try:
+            bot.send_message(message.chat.id, "⏳ Criando coluna no Google Sheets e reestruturando dados...")
+            
+            # Importação local para facilitar o manuseio de colunas (A1, B1, etc)
+            from gspread.utils import rowcol_to_a1
+            
+            cabecalho = sheet_meds.row_values(1)
+            
+            # Busca a coluna 'Outros Remédios' (ignorando diferenças de maiúsculas/espaços)
+            idx_outros = -1
+            for i, col in enumerate(cabecalho):
+                if "outros" in col.lower():
+                    idx_outros = i + 1 # gspread usa índice base 1
+                    break
+                    
+            if idx_outros != -1:
+                # 1. Puxa todos os dados da coluna atual "Outros Remédios"
+                valores_outros = sheet_meds.col_values(idx_outros)
+                
+                # 2. Calcula as coordenadas exatas
+                col_outros_a1 = rowcol_to_a1(1, idx_outros + 1) # Empurra para a direita
+                col_nova_a1 = rowcol_to_a1(1, idx_outros)       # Ocupa o buraco deixado
+                
+                # 3. Prepara as matrizes de dados no formato exigido pelo Google
+                update_outros = [[v] for v in valores_outros]
+                # Preenche as linhas dos dias anteriores com "vazio" para não corromper o passado
+                update_novo_med = [[novo_med]] + [[""]] * (len(valores_outros) - 1)
+                
+                # 4. Escreve tudo na planilha simultaneamente
+                sheet_meds.update(values=update_outros, range_name=col_outros_a1)
+                sheet_meds.update(values=update_novo_med, range_name=col_nova_a1)
+            else:
+                # Caso ocorra alguma anomalia e a coluna não exista, adiciona no final
+                nova_col_idx = len(cabecalho) + 1
+                sheet_meds.update_cell(1, nova_col_idx, novo_med)
+            
+            # Atualiza a memória local da Raspberry
+            padrao.append(novo_med)
+            ativos.append(novo_med)
+            salvar_remedios_padrao(padrao)
+            salvar_meds_ativos(ativos)
+            
+            bot.send_message(message.chat.id, f"✅ **{novo_med}** adicionado ao tratamento!\n\n✨ A aba 'Medicamentos' foi reorganizada automaticamente pelo bot sem quebrar o histórico.", parse_mode="Markdown")
+            
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Erro ao atualizar a planilha: {e}")
+            logging.error(f"Erro no addmed: {e}")
     else:
         bot.send_message(message.chat.id, "Esse medicamento já está cadastrado.")
 
